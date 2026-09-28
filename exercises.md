@@ -3,10 +3,10 @@
 > **Bài làm cá nhân.** Trả lời bằng lời của chính bạn, dựa trên những gì bạn
 > quan sát được khi chạy code — không sao chép đáp án của người khác.
 >
-> Cách trả lời: thay dòng `> *Câu trả lời của bạn*` bằng câu trả lời.
+> Cách trả lời: thay dòng đánh dấu bên dưới mỗi câu hỏi bằng câu trả lời.
 > `grade.py` đếm số câu đã trả lời (15 điểm cho 10 câu).
 >
-> Họ và tên: ..........................  Mã học viên: ..........................
+> Họ và tên: Bui Dinh De (không dấu theo tên repository) — Mã học viên: 2A202602818
 
 ---
 
@@ -39,10 +39,14 @@ Chạy service và gọi `/ask` vài lần. Dán một dòng log JSON bạn thu 
 nêu **hai** việc bạn làm được với dòng log đó mà `print("đã trả lời xong")`
 không làm được.
 
-**Phần giải thích đã chuẩn bị; còn thiếu log `/ask` chạy thật.**
-Hiện `/ask` trong `app/main.py` còn `NotImplementedError` của CP3/CP4,
-nên chưa có log `ask_completed` thực tế để dán vào đây. Log startup đã
-quan sát ở CP1 không thay thế được bằng chứng gọi `/ask` mà câu hỏi yêu cầu.
+Đã gọi `/ask` ba lần với cùng user trên service Docker local tại
+`http://localhost:8001`, cả ba lần trả HTTP 200. Dòng dưới đây lấy nguyên
+vẹn từ stdout của container bằng `docker compose logs --no-log-prefix agent`;
+đây là log thực tế của app dùng mock LLM, không phải log ví dụ được tự tạo:
+
+```json
+{"user_id": "reflection-cp1-3f1a8c65", "tokens_in": 4, "tokens_out": 36, "cost_usd": 2.22e-05, "event": "ask_completed", "level": "info", "timestamp": "2026-09-28T11:25:14.562253+00:00"}
+```
 
 Với log `ask_completed` có các trường theo thiết kế trong `app/main.py`,
 có thể làm hai việc:
@@ -57,13 +61,6 @@ Chuỗi `print("đã trả lời xong")` không chứa user, thời gian, token 
 chi phí nên không cung cấp dữ liệu cho hai phép thống kê trên. JSON có
 các trường rõ ràng và giữ giá trị số để chương trình đọc, lọc và cộng;
 mỗi sự kiện nằm trên một dòng giúp hệ thống thu thập log xử lý đúng ranh giới.
-
-**Cần bổ sung sau CP3:** chạy service, gọi `/ask` vài lần với khóa hợp lệ,
-sao chép một dòng `ask_completed` từ stdout, kiểm tra không lộ secret,
-và đối chiếu các trường với phần giải thích trên. Giữ dòng bên dưới cho đến
-khi có bằng chứng thật để bộ chấm chưa tính câu này là hoàn tất.
-
-> *Câu trả lời của bạn*
 
 ---
 
@@ -320,4 +317,26 @@ Ghi lại **một** lỗi bạn gặp khi deploy lên cloud (build fail, health 
 timeout, sai REDIS_URL, app không đọc `$PORT`...): thông báo lỗi là gì, bạn
 tìm ra nguyên nhân bằng cách nào, và sửa ra sao?
 
-> *Câu trả lời của bạn*
+Sau khi Render báo service Live, mở URL gốc
+`https://day12-agent-x6ug.onrender.com/` trên trình duyệt lại nhận:
+
+```json
+{"detail":"Not Found"}
+```
+
+Ban đầu phản hồi này dễ bị hiểu là deploy thất bại. Đối chiếu các route
+trong `app/main.py` cho thấy app chỉ khai báo `/health`, `/ready` và `/ask`,
+không có handler cho `/`. Vì vậy phản hồi 404 ở URL gốc là do truy cập
+đường dẫn chưa được khai báo, không chứng minh process khởi động lỗi.
+
+Cách xử lý là kiểm tra đúng endpoint: mở `/health` nhận HTTP 200 với
+`status: ok`; gọi `/ready` nhận HTTP 200 với `redis: true`. Tiếp tục gọi
+POST `/ask` không có khóa nhận 401, còn khóa hợp lệ nhận 200. Không cần
+sửa Dockerfile, Redis URL hay thêm trang chủ chỉ để làm mất thông báo 404.
+Ảnh dashboard và `/health` được lưu trong `screenshots/`, kết quả kiểm tra
+được ghi trong `DEPLOYMENT.md`.
+
+Qua sự cố này cần phân biệt ba lớp: process đang chạy, các dependency đã
+sẵn sàng, và đường dẫn/phương thức HTTP đang gọi có đúng hay không. Dashboard
+Live cùng `/health` 200 chưa đủ chứng minh `/ask` hoạt động; phải kiểm tra
+cả readiness và request có xác thực.
