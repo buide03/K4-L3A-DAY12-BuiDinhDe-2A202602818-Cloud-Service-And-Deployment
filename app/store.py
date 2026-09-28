@@ -30,7 +30,9 @@ def get_redis_client(url: str | None = None):
         import fakeredis
 
         return fakeredis.FakeRedis(decode_responses=True)
-    return redis.from_url(url, decode_responses=True)
+    return redis.from_url(
+        url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2,
+    )
 
 
 class ConversationStore:

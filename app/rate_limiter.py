@@ -13,6 +13,7 @@ import time
 import uuid
 
 from fastapi import HTTPException, status
+from redis.exceptions import WatchError
 
 WINDOW_SECONDS = 60
 
@@ -33,12 +34,12 @@ class RateLimiter:
         Các bước:
           1. ``now = now if now is not None else time.time()``
           2. Xóa các entry cũ hơn cửa sổ:
-             ``self.client.zremrangebyscore(key, 0, now - WINDOW_SECONDS)``
+             ``self.client.zremrangebyscore(key, "-inf", now - WINDOW_SECONDS)``
           3. Trả về ``self.client.zcard(key)``
         """
         now = now if now is not None else time.time()
         key = self._key(user_id)
-        self.client.zremrangebyscore(key, 0, now - WINDOW_SECONDS)
+        self.client.zremrangebyscore(key, "-inf", now - WINDOW_SECONDS)
         return int(self.client.zcard(key))
 
     def check(self, user_id: str, now: float | None = None) -> None:
@@ -46,7 +47,7 @@ class RateLimiter:
 
         Các bước:
           1. ``now = now if now is not None else time.time()``
-          2. Gọi ``self.hit_count(user_id, now)``.
+          2. WATCH key và đếm entry còn trong cửa sổ bằng ZCOUNT.
           3. Nếu số đó ``>= self.limit`` → raise
              ``HTTPException(status_code=429, detail="rate limit exceeded",
                              headers={"Retry-After": str(WINDOW_SECONDS)})``
@@ -60,12 +61,25 @@ class RateLimiter:
         sẽ chặn nhầm ngay ở request thứ ``limit``.
         """
         now = now if now is not None else time.time()
-        if self.hit_count(user_id, now) >= self.limit:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="rate limit exceeded",
-                headers={"Retry-After": str(WINDOW_SECONDS)},
-            )
         key = self._key(user_id)
-        self.client.zadd(key, {f"{now}:{uuid.uuid4().hex}": now})
-        self.client.expire(key, WINDOW_SECONDS)
+        # WATCH makes admission shared and atomic across workers/containers.
+        # Retry if another caller changes this user's window before EXEC.
+        while True:
+            try:
+                with self.client.pipeline() as pipe:
+                    pipe.watch(key)
+                    count = pipe.zcount(key, f"({now - WINDOW_SECONDS}", "+inf")
+                    if count >= self.limit:
+                        raise HTTPException(
+                            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail="rate limit exceeded",
+                            headers={"Retry-After": str(WINDOW_SECONDS)},
+                        )
+                    pipe.multi()
+                    pipe.zremrangebyscore(key, "-inf", now - WINDOW_SECONDS)
+                    pipe.zadd(key, {f"{now}:{uuid.uuid4().hex}": now})
+                    pipe.expire(key, WINDOW_SECONDS)
+                    pipe.execute()
+                    return
+            except WatchError:
+                continue

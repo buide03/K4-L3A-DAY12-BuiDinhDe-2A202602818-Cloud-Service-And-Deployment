@@ -1,0 +1,7 @@
+# Compose >= 2.24.4: replace the fixed host port, do not append to it.
+services:
+  agent:
+    ports: !override
+      - "127.0.0.1::${PORT:-8000}"
+  redis:
+    ports: !reset []

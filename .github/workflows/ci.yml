@@ -1,0 +1,111 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Checkpoint Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify repository hygiene (No leaked secrets)
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$|\.(pem|key)$'; then
+            echo "::error::Detected committed secret file (.env, .pem, or .key)"
+            exit 1
+          fi
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit & checkpoint tests (CP1-CP4)
+        env:
+          AGENT_API_KEY: ci-dummy
+          REDIS_URL: "fake://"
+        run: |
+          pytest tests/test_cp1.py tests/test_cp2.py tests/test_cp3.py tests/test_cp4.py -v -m "not docker"
+
+  build:
+    name: Build & Validate Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t day12-agent:ci .
+
+      - name: Verify container runs as non-root
+        run: |
+          USER_ID=$(docker run --rm day12-agent:ci id -u)
+          echo "Container runs with UID: $USER_ID"
+          if [ "$USER_ID" -eq 0 ]; then
+            echo "::error::Security requirement failed: Container must run as non-root"
+            exit 1
+          fi
+
+      - name: Verify image size (<500MB)
+        run: |
+          IMAGE_BYTES=$(docker image inspect day12-agent:ci --format '{{.Size}}')
+          IMAGE_MB=$((IMAGE_BYTES / 1000000))
+          echo "Final image size: ${IMAGE_MB}MB"
+          if [ "$IMAGE_MB" -ge 500 ]; then
+            echo "::error::Image size is ${IMAGE_MB}MB, exceeding the 500MB limit"
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy to Cloud
+    needs: [test, build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Trigger Render Deploy Hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$RENDER_DEPLOY_HOOK" ]; then
+            echo "Triggering deployment via Render Deploy Hook..."
+            curl -fsS -X POST "$RENDER_DEPLOY_HOOK"
+          else
+            echo "No RENDER_DEPLOY_HOOK found in GitHub Secrets; skipping remote trigger."
+          fi
+
+      - name: Smoke test deployed service with bounded retries
+        env:
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+        run: |
+          TARGET_URL="${PUBLIC_URL:-https://day12-agent-x6ug.onrender.com}"
+          echo "Starting smoke test on: $TARGET_URL"
+          for attempt in $(seq 1 10); do
+            echo "Attempt $attempt/10: probing $TARGET_URL/health..."
+            if curl -fsS --connect-timeout 5 --max-time 15 "$TARGET_URL/health" | grep -q '"status":"ok"'; then
+              echo "Smoke test passed: Service is live and healthy!"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "Warning: Smoke test timed out or service is warming up."

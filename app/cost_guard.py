@@ -66,6 +66,8 @@ class CostGuard:
           3. ``return float(total)``
         """
         key = self._key(user_id, month)
-        total = self.client.incrbyfloat(key, cost)
-        self.client.expire(key, KEY_TTL_SECONDS)
+        with self.client.pipeline(transaction=True) as pipe:
+            pipe.incrbyfloat(key, cost)
+            pipe.expire(key, KEY_TTL_SECONDS)
+            total, _ = pipe.execute()
         return float(total)
