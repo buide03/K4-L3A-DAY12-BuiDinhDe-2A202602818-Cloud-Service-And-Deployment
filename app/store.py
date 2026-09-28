@@ -47,16 +47,19 @@ class ConversationStore:
     def ping(self) -> bool:
         """Redis có trả lời không? Dùng cho endpoint /ready.
 
-        TODO (CP4): gọi ``self.client.ping()`` trong try/except.
+        Cách xử lý: gọi ``self.client.ping()`` trong try/except.
         Trả ``True`` nếu thành công, ``False`` nếu có bất kỳ Exception nào
         (mất mạng, sai mật khẩu, Redis chưa khởi động...).
         """
-        raise NotImplementedError("TODO (CP4): cài đặt ping")
+        try:
+            return bool(self.client.ping())
+        except Exception:
+            return False
 
     def append(self, user_id: str, role: str, content: str) -> None:
         """Ghi thêm một lượt vào lịch sử.
 
-        TODO (CP4):
+        Cách xử lý:
           1. ``self.client.rpush(key, json.dumps({"role": role, "content": content},
              ensure_ascii=False))``
           2. ``self.client.ltrim(key, -HISTORY_MAX_MESSAGES, -1)`` — chỉ giữ
@@ -65,15 +68,22 @@ class ConversationStore:
           3. ``self.client.expire(key, HISTORY_TTL_SECONDS)`` — hội thoại cũ
              tự hết hạn, khỏi phải dọn tay.
         """
-        raise NotImplementedError("TODO (CP4): cài đặt append")
+        key = self._key(user_id)
+        message = json.dumps({"role": role, "content": content}, ensure_ascii=False)
+        with self.client.pipeline(transaction=True) as pipe:
+            pipe.rpush(key, message)
+            pipe.ltrim(key, -HISTORY_MAX_MESSAGES, -1)
+            pipe.expire(key, HISTORY_TTL_SECONDS)
+            pipe.execute()
 
     def get_history(self, user_id: str) -> list[dict]:
         """Đọc lịch sử hội thoại, cũ nhất trước.
 
-        TODO (CP4): ``self.client.lrange(key, 0, -1)`` rồi ``json.loads``
+        Cách xử lý: ``self.client.lrange(key, 0, -1)`` rồi ``json.loads``
         từng phần tử. Chưa có gì → trả về list rỗng.
         """
-        raise NotImplementedError("TODO (CP4): cài đặt get_history")
+        messages = self.client.lrange(self._key(user_id), 0, -1)
+        return [json.loads(message) for message in messages]
 
     def clear(self, user_id: str) -> None:
         """CHO SẴN — xóa lịch sử của một user."""

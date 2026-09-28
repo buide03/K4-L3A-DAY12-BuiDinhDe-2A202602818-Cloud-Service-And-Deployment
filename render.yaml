@@ -6,6 +6,7 @@
 services:
   - type: web
     name: day12-agent
+    region: singapore
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
@@ -22,10 +23,11 @@ services:
       - key: REDIS_URL
         fromService:
           name: day12-redis
-          type: redis
+          type: keyvalue
           property: connectionString
 
-  - type: redis
+  - type: keyvalue
     name: day12-redis
+    region: singapore
     plan: free
     ipAllowList: []
